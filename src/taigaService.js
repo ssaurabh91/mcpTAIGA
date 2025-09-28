@@ -65,15 +65,72 @@ export class TaigaService {
   /**
    * List user stories for a project
    * @param {string} projectId - Project ID
+   * @param {Object} options - Pagination options
+   * @param {number} [options.pageSize=100] - Number of stories per page (max 100)
+   * @param {number} [options.page] - Specific page number to fetch
+   * @param {boolean} [options.fetchAll=true] - Whether to fetch all stories across all pages
    * @returns {Promise<Array>} - List of user stories
    */
-  async listUserStories(projectId) {
+  async listUserStories(projectId, options = {}) {
+    const { pageSize = 100, page, fetchAll = true } = options;
+
     try {
       const client = await createAuthenticatedClient();
+
+      // If requesting a specific page, return just that page
+      if (page !== undefined && !fetchAll) {
+        const response = await client.get('/userstories', {
+          params: {
+            project: projectId,
+            page_size: pageSize,
+            page: page
+          }
+        });
+        return response.data;
+      }
+
+      // If fetchAll is true (default), get all stories across all pages
+      if (fetchAll) {
+        let allStories = [];
+        let currentPage = 1;
+        let hasMorePages = true;
+
+        while (hasMorePages) {
+          const response = await client.get('/userstories', {
+            params: {
+              project: projectId,
+              page_size: pageSize,
+              page: currentPage
+            }
+          });
+
+          const stories = response.data;
+          allStories = allStories.concat(stories);
+
+          // Check pagination headers to see if there are more pages
+          const paginationNext = response.headers['x-pagination-next'];
+          hasMorePages = paginationNext && paginationNext !== 'null';
+          currentPage++;
+
+          // Safety check to prevent infinite loops
+          if (currentPage > 1000) {
+            console.warn('Stopped pagination after 1000 pages to prevent infinite loop');
+            break;
+          }
+        }
+
+        return allStories;
+      }
+
+      // Default single page request
       const response = await client.get('/userstories', {
-        params: { project: projectId }
+        params: {
+          project: projectId,
+          page_size: pageSize
+        }
       });
       return response.data;
+
     } catch (error) {
       console.error(`Failed to list user stories for project ${projectId}:`, error.message);
       throw new Error('Failed to list user stories from Taiga');
