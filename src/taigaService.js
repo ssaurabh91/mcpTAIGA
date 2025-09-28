@@ -230,4 +230,93 @@ export class TaigaService {
       throw new Error('Failed to get task statuses from Taiga');
     }
   }
+
+  /**
+   * Get details of a specific user story
+   * @param {string} userStoryId - User story ID
+   * @returns {Promise<Object>} - User story details
+   */
+  async getUserStory(userStoryId) {
+    try {
+      const client = await createAuthenticatedClient();
+      const response = await client.get(`/userstories/${userStoryId}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to get user story ${userStoryId}:`, error.message);
+      throw new Error('Failed to get user story details from Taiga');
+    }
+  }
+
+  /**
+   * Update an existing user story
+   * @param {string} userStoryId - User story ID
+   * @param {Object} updateData - Data to update
+   * @param {string} [updateData.subject] - User story subject/title
+   * @param {string} [updateData.description] - User story description
+   * @param {number} [updateData.status] - Status ID
+   * @param {number} [updateData.assigned_to] - Assigned user ID
+   * @param {Array} [updateData.tags] - Array of tags
+   * @param {string} [updateData.points] - Story points
+   * @param {string} [updateData.due_date] - Due date in YYYY-MM-DD format
+   * @returns {Promise<Object>} - Updated user story
+   */
+  async updateUserStory(userStoryId, updateData) {
+    try {
+      const client = await createAuthenticatedClient();
+
+      // First get the current user story to obtain the version for optimistic locking
+      const currentStory = await this.getUserStory(userStoryId);
+
+      // Add the version to the update data for optimistic locking
+      const updatePayload = {
+        ...updateData,
+        version: currentStory.version
+      };
+
+      const response = await client.patch(`/userstories/${userStoryId}`, updatePayload);
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to update user story ${userStoryId}:`, error.message);
+      if (error.response) {
+        console.error(`Status: ${error.response.status}, Data:`, error.response.data);
+      }
+      throw new Error('Failed to update user story in Taiga');
+    }
+  }
+
+  /**
+   * List tasks associated with a user story
+   * @param {string} userStoryId - User story ID
+   * @returns {Promise<Array>} - List of tasks
+   */
+  async listUserStoryTasks(userStoryId) {
+    try {
+      const client = await createAuthenticatedClient();
+      const response = await client.get('/tasks', {
+        params: { user_story: userStoryId }
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to list tasks for user story ${userStoryId}:`, error.message);
+      throw new Error('Failed to list tasks from Taiga');
+    }
+  }
+
+  /**
+   * List project members
+   * @param {string} projectId - Project ID
+   * @returns {Promise<Array>} - List of project members
+   */
+  async listProjectMembers(projectId) {
+    try {
+      const client = await createAuthenticatedClient();
+      const response = await client.get('/memberships', {
+        params: { project: projectId }
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to list project members for project ${projectId}:`, error.message);
+      throw new Error('Failed to list project members from Taiga');
+    }
+  }
 }

@@ -30,12 +30,23 @@ server.resource(
 This MCP server allows you to interact with Taiga using natural language.
 You can perform the following actions:
 
-1. List your projects
-2. Create user stories within a project
-3. List user stories in a project
-4. Create tasks within a user story
-5. List tasks in a user story
-6. Authenticate with Taiga
+1. Authenticate with Taiga
+2. List your projects
+3. Get project details
+4. Create user stories within a project
+5. List user stories in a project
+6. Get user story details
+7. Update user stories (descriptions, status, assignments, etc.)
+8. Create tasks within a user story
+9. List tasks in a user story
+
+User Story Management:
+- updateUserStory: Modify existing user stories (change subject, description, status, assignments, story points, tags, due dates)
+- getUserStory: Get detailed information about a specific user story
+- listUserStoryTasks: Get all tasks associated with a user story
+
+Project Management:
+- listProjectMembers: Get all members of a project (useful for assignments)
 
 The server connects to the Taiga API at ${process.env.TAIGA_API_URL || 'https://api.taiga.io/api/v1'}.
 
@@ -352,6 +363,139 @@ ${userStories.map(us => `- #${us.ref}: ${us.subject} (Status: ${us.status_extra_
   }
 );
 
+// Add tool for updating a user story
+server.tool(
+  'updateUserStory',
+  {
+    userStoryIdentifier: z.string().describe('User story ID or reference number (e.g., "123" or "#45")'),
+    projectIdentifier: z.string().optional().describe('Project ID or slug (needed if using reference number)'),
+    subject: z.string().optional().describe('Updated user story title/subject'),
+    description: z.string().optional().describe('Updated user story description'),
+    status: z.string().optional().describe('Status name (e.g., "New", "In progress", "Done")'),
+    assignedTo: z.string().optional().describe('Username to assign the story to'),
+    tags: z.array(z.string()).optional().describe('Array of tags'),
+    points: z.string().optional().describe('Story points (e.g., "1", "2", "3", "5", "8")'),
+    dueDate: z.string().optional().describe('Due date in YYYY-MM-DD format'),
+  },
+  async ({ userStoryIdentifier, projectIdentifier, subject, description, status, assignedTo, tags, points, dueDate }) => {
+    try {
+      // Get user story ID if a reference number was provided
+      let userStoryId = userStoryIdentifier;
+      if (userStoryIdentifier.startsWith('#')) {
+        if (!projectIdentifier) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Error: Project identifier is required when using user story reference number.',
+              },
+            ],
+          };
+        }
+
+        // Get project ID if a slug was provided
+        let projectId = projectIdentifier;
+        if (isNaN(projectIdentifier)) {
+          const project = await taigaService.getProjectBySlug(projectIdentifier);
+          projectId = project.id;
+        }
+
+        // Remove the # prefix and find the user story
+        const refNumber = userStoryIdentifier.substring(1);
+        const userStories = await taigaService.listUserStories(projectId);
+        const userStory = userStories.find(us => us.ref.toString() === refNumber);
+        if (userStory) {
+          userStoryId = userStory.id;
+        } else {
+          throw new Error(`User story with reference ${userStoryIdentifier} not found`);
+        }
+      }
+
+      // Build update data object
+      const updateData = {};
+      if (subject !== undefined) updateData.subject = subject;
+      if (description !== undefined) updateData.description = description;
+      if (tags !== undefined) updateData.tags = tags;
+      if (points !== undefined) updateData.points = points;
+      if (dueDate !== undefined) updateData.due_date = dueDate;
+
+      // Get project ID for status and assignment lookups
+      const currentStory = await taigaService.getUserStory(userStoryId);
+      const projectId = currentStory.project;
+
+      // Handle status update
+      if (status) {
+        const statuses = await taigaService.getUserStoryStatuses(projectId);
+        const matchingStatus = statuses.find(s =>
+          s.name.toLowerCase() === status.toLowerCase()
+        );
+        if (matchingStatus) {
+          updateData.status = matchingStatus.id;
+        } else {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error: Status "${status}" not found. Available statuses: ${statuses.map(s => s.name).join(', ')}`,
+              },
+            ],
+          };
+        }
+      }
+
+      // Handle assignment
+      if (assignedTo) {
+        const members = await taigaService.listProjectMembers(projectId);
+        const matchingMember = members.find(m =>
+          m.user_extra_info.username.toLowerCase() === assignedTo.toLowerCase() ||
+          m.user_extra_info.full_name.toLowerCase() === assignedTo.toLowerCase()
+        );
+        if (matchingMember) {
+          updateData.assigned_to = matchingMember.user;
+        } else {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error: User "${assignedTo}" not found in project. Available members: ${members.map(m => m.user_extra_info.username).join(', ')}`,
+              },
+            ],
+          };
+        }
+      }
+
+      // Update the user story
+      const updatedStory = await taigaService.updateUserStory(userStoryId, updateData);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `User story updated successfully!
+
+Subject: ${updatedStory.subject}
+Reference: #${updatedStory.ref}
+Status: ${updatedStory.status_extra_info?.name || 'Unknown'}
+Assigned to: ${updatedStory.assigned_to_extra_info?.full_name || 'Unassigned'}
+Points: ${updatedStory.points ? (typeof updatedStory.points === 'object' ? updatedStory.points.name || 'None' : updatedStory.points) : 'None'}
+Project: ${updatedStory.project_extra_info?.name}
+            `,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Failed to update user story: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Add tool for creating a task
 server.tool(
   'createTask',
@@ -434,6 +578,213 @@ User Story: #${createdTask.user_story_extra_info?.ref} - ${createdTask.user_stor
           {
             type: 'text',
             text: `Failed to create task: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Add tool for getting user story details
+server.tool(
+  'getUserStory',
+  {
+    userStoryIdentifier: z.string().describe('User story ID or reference number (e.g., "123" or "#45")'),
+    projectIdentifier: z.string().optional().describe('Project ID or slug (needed if using reference number)'),
+  },
+  async ({ userStoryIdentifier, projectIdentifier }) => {
+    try {
+      // Get user story ID if a reference number was provided
+      let userStoryId = userStoryIdentifier;
+      if (userStoryIdentifier.startsWith('#')) {
+        if (!projectIdentifier) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Error: Project identifier is required when using user story reference number.',
+              },
+            ],
+          };
+        }
+
+        // Get project ID if a slug was provided
+        let projectId = projectIdentifier;
+        if (isNaN(projectIdentifier)) {
+          const project = await taigaService.getProjectBySlug(projectIdentifier);
+          projectId = project.id;
+        }
+
+        // Remove the # prefix and find the user story
+        const refNumber = userStoryIdentifier.substring(1);
+        const userStories = await taigaService.listUserStories(projectId);
+        const userStory = userStories.find(us => us.ref.toString() === refNumber);
+        if (userStory) {
+          userStoryId = userStory.id;
+        } else {
+          throw new Error(`User story with reference ${userStoryIdentifier} not found`);
+        }
+      }
+
+      const userStory = await taigaService.getUserStory(userStoryId);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `User Story Details:
+
+Subject: ${userStory.subject}
+Reference: #${userStory.ref}
+Description: ${userStory.description || 'No description'}
+Status: ${userStory.status_extra_info?.name || 'Unknown'}
+Assigned to: ${userStory.assigned_to_extra_info?.full_name || 'Unassigned'}
+Points: ${userStory.points ? (typeof userStory.points === 'object' ? userStory.points.name || 'None' : userStory.points) : 'None'}
+Tags: ${userStory.tags?.length ? userStory.tags.join(', ') : 'None'}
+Due Date: ${userStory.due_date || 'Not set'}
+Created: ${new Date(userStory.created_date).toLocaleString()}
+Modified: ${new Date(userStory.modified_date).toLocaleString()}
+Project: ${userStory.project_extra_info?.name}
+            `,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Failed to get user story details: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Add tool for listing project members
+server.tool(
+  'listProjectMembers',
+  {
+    projectIdentifier: z.string().describe('Project ID or slug'),
+  },
+  async ({ projectIdentifier }) => {
+    try {
+      // Get project ID if a slug was provided
+      let projectId = projectIdentifier;
+      if (isNaN(projectIdentifier)) {
+        const project = await taigaService.getProjectBySlug(projectIdentifier);
+        projectId = project.id;
+      }
+
+      const members = await taigaService.listProjectMembers(projectId);
+
+      if (members.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'No members found in this project.',
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Project Members:
+
+${members.map(member => `- ${member.user_extra_info.full_name} (@${member.user_extra_info.username}) - ${member.role_name}`).join('\n')}
+            `,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Failed to list project members: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Add tool for listing tasks in a user story
+server.tool(
+  'listUserStoryTasks',
+  {
+    userStoryIdentifier: z.string().describe('User story ID or reference number (e.g., "123" or "#45")'),
+    projectIdentifier: z.string().optional().describe('Project ID or slug (needed if using reference number)'),
+  },
+  async ({ userStoryIdentifier, projectIdentifier }) => {
+    try {
+      // Get user story ID if a reference number was provided
+      let userStoryId = userStoryIdentifier;
+      if (userStoryIdentifier.startsWith('#')) {
+        if (!projectIdentifier) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Error: Project identifier is required when using user story reference number.',
+              },
+            ],
+          };
+        }
+
+        // Get project ID if a slug was provided
+        let projectId = projectIdentifier;
+        if (isNaN(projectIdentifier)) {
+          const project = await taigaService.getProjectBySlug(projectIdentifier);
+          projectId = project.id;
+        }
+
+        // Remove the # prefix and find the user story
+        const refNumber = userStoryIdentifier.substring(1);
+        const userStories = await taigaService.listUserStories(projectId);
+        const userStory = userStories.find(us => us.ref.toString() === refNumber);
+        if (userStory) {
+          userStoryId = userStory.id;
+        } else {
+          throw new Error(`User story with reference ${userStoryIdentifier} not found`);
+        }
+      }
+
+      const tasks = await taigaService.listUserStoryTasks(userStoryId);
+
+      if (tasks.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'No tasks found for this user story.',
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Tasks in User Story:
+
+${tasks.map(task => `- #${task.ref}: ${task.subject} (Status: ${task.status_extra_info?.name || 'Unknown'}, Assigned: ${task.assigned_to_extra_info?.full_name || 'Unassigned'})`).join('\n')}
+            `,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Failed to list user story tasks: ${error.message}`,
           },
         ],
       };
