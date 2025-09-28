@@ -282,8 +282,11 @@ server.tool(
   'listUserStories',
   {
     projectIdentifier: z.string().describe('Project ID or slug'),
+    pageSize: z.number().optional().describe('Number of stories per page (1-100, default: 100)'),
+    page: z.number().optional().describe('Specific page number to fetch'),
+    fetchAll: z.boolean().optional().describe('Whether to fetch all stories across all pages (default: true)'),
   },
-  async ({ projectIdentifier }) => {
+  async ({ projectIdentifier, pageSize, page, fetchAll }) => {
     try {
       // Get project ID if a slug was provided
       let projectId = projectIdentifier;
@@ -292,7 +295,25 @@ server.tool(
         projectId = project.id;
       }
 
-      const userStories = await taigaService.listUserStories(projectId);
+      // Validate pageSize
+      if (pageSize !== undefined && (pageSize < 1 || pageSize > 100)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: pageSize must be between 1 and 100.',
+            },
+          ],
+        };
+      }
+
+      const options = {
+        pageSize,
+        page,
+        fetchAll: fetchAll !== false // Default to true unless explicitly set to false
+      };
+
+      const userStories = await taigaService.listUserStories(projectId, options);
 
       if (userStories.length === 0) {
         return {
@@ -305,11 +326,13 @@ server.tool(
         };
       }
 
+      const paginationInfo = page !== undefined ? ` (Page ${page})` : fetchAll !== false ? ` (All ${userStories.length} stories)` : '';
+
       return {
         content: [
           {
             type: 'text',
-            text: `User Stories in Project:
+            text: `User Stories in Project${paginationInfo}:
 
 ${userStories.map(us => `- #${us.ref}: ${us.subject} (Status: ${us.status_extra_info?.name || 'Unknown'})`).join('\n')}
             `,
@@ -421,5 +444,3 @@ User Story: #${createdTask.user_story_extra_info?.ref} - ${createdTask.user_stor
 // Start the server
 const transport = new StdioServerTransport();
 await server.connect(transport);
-
-console.log('Taiga MCP server started');
