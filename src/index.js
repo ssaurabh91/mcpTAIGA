@@ -795,3 +795,5 @@ ${tasks.map(task => `- #${task.ref}: ${task.subject} (Status: ${task.status_extr
 // Start the server
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+console.error('Taiga MCP server started');
