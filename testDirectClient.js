@@ -1,5 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 async function main() {
   const transport = new StdioClientTransport({
@@ -24,13 +27,13 @@ async function main() {
     await client.connect(transport);
     console.log('Connected to Taiga MCP server');
 
-    // Autenticar primero
+    // Authenticate with environment credentials
     console.log('\nAuthenticating...');
     const authResult = await client.callTool({
       name: 'authenticate',
       arguments: {
-        username: process.env.TAIGA_USERNAME || 'adriapedralbes',
-        password: process.env.TAIGA_PASSWORD || 'boruto321'
+        username: process.env.TAIGA_USERNAME,
+        password: process.env.TAIGA_PASSWORD
       },
     });
     console.log('Authentication result:');
