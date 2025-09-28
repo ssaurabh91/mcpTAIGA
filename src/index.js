@@ -773,4 +773,5 @@ ${tasks.map(task => `- #${task.ref}: ${task.subject} (Status: ${task.status_extr
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-console.log('Taiga MCP server started');
+console.error('Taiga MCP server started');
+
